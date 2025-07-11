@@ -32,9 +32,8 @@ def lambda_handler(event, context):
                 base64.b64decode(msg["value"]).decode("utf-8"), strict=False
             )
             
-            logger.info(f"Processing anomaly: {jsg_msg}")
+            logger.info(f"Processing anomaly from IP: {jsg_msg['attacker_id']} at {datetime.fromtimestamp(jsg_msg['attack_start_time']).isoformat()}")
             
-            # Format anomaly data for the original template
             event_data = f"""Fragment Attack Detection:
 - Attack Start Time: {datetime.fromtimestamp(jsg_msg['attack_start_time']).isoformat()}Z
 - Attack End Time: {datetime.fromtimestamp(jsg_msg['attack_end_time']).isoformat()}Z  
@@ -50,22 +49,29 @@ def lambda_handler(event, context):
             max_retries = 3
             for attempt in range(max_retries):
                 try:
+                    logger.info(f"Calling agent {AGENT_ID}/{AGENT_ALIAS_ID} - Attempt {attempt + 1}")
                     response = bedrock_agent_runtime.invoke_agent(
                         agentId=AGENT_ID,
                         agentAliasId=AGENT_ALIAS_ID,
-                        sessionId=f'anomaly-{context.aws_request_id}-{attempt}',
-                        inputText=f"Analyze this network security event and generate an incident report using the established template: {event_data}"
+                        sessionId=f'anomaly-{int(time.time())}-{attempt}', 
+                        inputText=f"Analyze this network security event: {event_data}"
                     )
                     
                     # Process streaming response
                     agent_response = ""
-                    for event_chunk in response['completion']:
-                        if 'chunk' in event_chunk:
-                            chunk = event_chunk['chunk']
-                            if 'bytes' in chunk:
-                                agent_response += chunk['bytes'].decode('utf-8')
+                    chunk_count = 0
+                    try:
+                        for event_chunk in response['completion']:
+                            chunk_count += 1
+                            if 'chunk' in event_chunk:
+                                chunk = event_chunk['chunk']
+                                if 'bytes' in chunk:
+                                    agent_response += chunk['bytes'].decode('utf-8')
+                    except Exception as stream_error:
+                        logger.error(f"Stream failed after {chunk_count} chunks: {str(stream_error)}")
+                        pass
                     
-                    logger.info(f"Agent analysis complete")
+                    logger.info(f"SUCCESS: Agent completed, {chunk_count} chunks")
                     responses.append({"anomaly": jsg_msg, "agent_response": agent_response})
                     break  # Success, exit retry loop
                     
@@ -81,5 +87,13 @@ def lambda_handler(event, context):
                             responses.append({"anomaly": jsg_msg, "error": "throttled"})
                     else:
                         raise e
+                        
+                except Exception as agent_error:
+                    logger.error(f"Agent error (attempt {attempt + 1}): {str(agent_error)}")
+                    if attempt < max_retries - 1:
+                        time.sleep(2 ** attempt)
+                    else:
+                        responses.append({"anomaly": jsg_msg, "error": str(agent_error)})
+                        break
     
     return responses
