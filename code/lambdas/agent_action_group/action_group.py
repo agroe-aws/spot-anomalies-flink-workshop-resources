@@ -58,13 +58,35 @@ def lambda_handler(event, context):
                 content = result['output']['message']['content'][0]['text'].strip()
                 print(f"Raw Nova response: '{content}'")
 
+                # Clean up the response to ensure valid JSON
                 if content.startswith('```'):
                     content = content.split('```')[1].strip()
                     if content.startswith('json'):
                         content = content[4:].strip()
                 
+                # Remove any leading/trailing non-JSON characters
+                content = content.strip()
+                if not content.startswith('{'):
+                    content = content[content.find('{'):]
+                if not content.endswith('}'): 
+                    content = content[:content.rfind('}')+1]
+                
+                # Replace any problematic characters
+                content = content.replace('\\n', '\n').replace('\\"', '\"')
+                content = content.replace('\\\\', '\\')
+                
                 print(f"Cleaned content for JSON parsing: '{content}'")
-                report_data = json.loads(content)
+                
+                try:
+                    report_data = json.loads(content)
+                except json.JSONDecodeError as json_error:
+                    print(f"JSON parsing error: {str(json_error)}")
+                    # Create a fallback response
+                    report_data = {
+                        "incident_report": "Security Alert: Network Event Detected\n\nA security event was detected in the network traffic.\n\nPlease investigate further.",
+                        "severity": 2,
+                        "ip_address": event_data.split('IP: ')[1].split('\n')[0] if 'IP: ' in event_data else "Unknown"
+                    }
                 
             except Exception as nova_error:
                 print(f"Model response failed: {str(nova_error)}")
