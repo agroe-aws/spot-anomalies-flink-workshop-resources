@@ -1,5 +1,5 @@
 {
-  "app": "python3 app.py",
+  "app": "python_wrapper.bat app.py",
   "watch": {
     "include": [
       "**"
